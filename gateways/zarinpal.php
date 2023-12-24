@@ -25,6 +25,15 @@ class EDD_ZarinPal_Gateway {
 	 */
 	public $keyname;
 
+
+	/**
+	 * Payment file path
+	 * 
+	 * @var string
+	 */
+	private $payment_file = __DIR__ . '/payments.php';
+
+
 	/**
 	 * Initialize gateway and hook
 	 *
@@ -79,7 +88,7 @@ class EDD_ZarinPal_Gateway {
 	 */
 	public function process( $purchase_data ) {
 		global $edd_options;
-		@ session_start();
+
 		$payment = $this->insert_payment( $purchase_data );
 
 		if ( $payment ) {
@@ -127,7 +136,7 @@ class EDD_ZarinPal_Gateway {
 			if ( $result['Status'] == 100 ) {
 				edd_insert_payment_note( $payment, 'کد تراکنش زرین‌پال: ' . $result['Authority'] );
 				edd_update_payment_meta( $payment, 'zarinpal_authority', $result['Authority'] );
-				$_SESSION['zp_payment'] = $payment;
+				$this->store_payment_id_in_file($payment);
 
 				wp_redirect( sprintf( $redirect, $result['Authority'] ) );
 			} else {
@@ -154,9 +163,9 @@ class EDD_ZarinPal_Gateway {
 		if ( isset( $_GET['Authority'] ) ) {
 			$authority = sanitize_text_field( $_GET['Authority'] );
 
-			@ session_start();
-			$payment = edd_get_payment( $_SESSION['zp_payment'] );
-			unset( $_SESSION['zp_payment'] );
+			$payment_id = $this->get_payment_id_by_user();
+
+			$payment = edd_get_payment($payment_id['payment'] ?? null);
 
 			if ( ! $payment ) {
 				wp_die( 'رکورد پرداخت موردنظر وجود ندارد!' );
@@ -198,6 +207,7 @@ class EDD_ZarinPal_Gateway {
 			}
 
 			if ( 100 == $result['Status'] ) {
+				$this->remove_payment_by_user();
 				edd_insert_payment_note( $payment->ID, 'شماره تراکنش بانکی: ' . $result['RefID'] );
 				edd_update_payment_meta( $payment->ID, 'zarinpal_refid', $result['RefID'] );
 				edd_update_payment_status( $payment->ID, 'publish' );
@@ -384,6 +394,81 @@ class EDD_ZarinPal_Gateway {
 		return $message;
 
 	}
+
+	/**
+	 * Add payment for signedIn user by payment Id.
+	 * 
+	 * @param int payment
+	 * 
+	 * @return bool
+	 */
+	private function store_payment_id_in_file(int $payment)
+	{
+		if (! file_exists($this->payment_file)) {
+			file_put_contents($this->payment_file, "<?php return [];");
+		}
+
+		$payments_array = include 'payments.php';
+
+		if (! $this->item_already_exists($payments_array, $payment)) {
+			array_push($payments_array, [
+				'user_id' => get_current_user_id(),
+				'payment' => $payment,
+			]);
+		}
+
+		return file_put_contents($this->payment_file, "<?php return " . var_export($payments_array, true) . ";");
+	}
+
+	/**
+	 * Get Payment id for signed in user.
+	 * 
+	 * @return array
+	 */
+	private function get_payment_id_by_user()
+	{
+		$payments_array = include 'payments.php';
+
+		return array_reduce($payments_array, function($carry, $item) {
+			if ($item["user_id"] === get_current_user_id()) {
+				return array_merge($carry, $item);
+			}
+			return $carry;
+		}, []);
+	}
+
+	/**
+	 * Check if item already exists in payment list.
+	 * 
+	 * @return array
+	 */
+	private function item_already_exists(array $payments_array, int $payment)
+	{
+		return array_filter($payments_array, function ($item) use ($payment){
+			return $item['user_id'] == get_current_user_id() && $item['payment'] == $payment;
+		});
+	}
+
+	/**
+	 * Rmove paid order from payment list.
+	 * 
+	 * @return void
+	 */
+	private function remove_payment_by_user()
+	{
+		$payments_array = include 'payments.php';
+
+		$filtered_array = [];
+
+		foreach($payments_array as $item) {
+			if ($item['user_id'] !== get_current_user_id()) {
+				array_push($filtered_array, $item);
+			} 
+		}
+
+		file_put_contents($this->payment_file, "<?php return " . var_export($filtered_array, true) . ";");
+	}
+
 }
 
 endif;
